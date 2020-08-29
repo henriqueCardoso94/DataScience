@@ -1,0 +1,79 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(na.tools)
+library(ggimage)
+
+pbp <- read_csv(url("https://github.com/ryurko/nflscrapR-data/raw/master/play_by_play_data/regular_season/reg_pbp_2019.csv"))
+```
+```{r}
+corridas <- pbp %>% filter(rush_attempt==1, play_type=="run") %>% select(desc, rush_attempt, yards_gained, rusher_player_name, rush_touchdown, epa, posteam, td_prob, rusher_player_id)
+
+summary(corridas["yards_gained"])
+hist(corridas$yards_gained, breaks= 60)
+```
+```{r}
+corridasMaisDe8 <- corridas %>% filter(yards_gained >= 9) 
+summary(corridasMaisDe8["yards_gained"])
+hist(corridasMaisDe8$yards_gained, breaks = 60)
+
+corridasMaisDe8 %>%
+	group_by(yards_gained) %>%
+	summarize(Corridas = n()) %>%
+	arrange(desc(Corridas))
+```
+
+```{r}
+rank <- corridasMaisDe8 %>%
+ group_by(rusher_player_id) %>%
+ mutate(EpaMedio = mean(epa, na.rm = TRUE), TotalEpa = sum(epa, na.rm = TRUE), Time = posteam, TDs = sum(rush_touchdown), "Jardas Por Carregada"=mean(yards_gained), Corridas=n()) %>%
+ select (Time, rusher_player_name, EpaMedio, TotalEpa, Corridas,  TDs) %>% distinct %>%
+ arrange(desc(EpaMedio),  na.rm = TRUE) %>%
+ filter(Corridas >= 20)
+rank
+```
+```{r}
+corridas <- corridas %>%
+  mutate(
+    CL = if_else(yards_gained >= 9, 1 , 0), #clutch line
+    BPS = if_else(yards_gained >= 20 | (yards_gained >= 9 & rush_touchdown == 1), 1, 0) #sucesso na big play
+  )
+```
+
+```{r}
+rank2 <- corridas %>%
+ filter(yards_gained >= 9) %>%
+ group_by(rusher_player_id) %>%
+ mutate(EpaMedio = mean(epa, na.rm = TRUE), TotalEpa = sum(epa, na.rm = TRUE), Time = posteam, TDs = sum(rush_touchdown), "Jardas Por Carregada"=mean(yards_gained), Corridas=n(), OpenFieldRatio = sum(BPS) / sum(CL), TotalBPS = sum(BPS), TotalCL = sum(CL)) %>%
+ select (Time, rusher_player_name, OpenFieldRatio, TotalBPS, TotalCL, EpaMedio, TotalEpa, Corridas,  TDs) %>% distinct %>%
+ arrange(desc(OpenFieldRatio),  na.rm = TRUE) %>%
+ filter(Corridas >= 20)
+rank2
+```
+```{r}
+rank3 <- corridas %>%
+ filter(yards_gained >= 9) %>%
+ group_by(rusher_player_id) %>%
+ mutate(EpaMedio = mean(epa, na.rm = TRUE), TotalEpa = sum(epa, na.rm = TRUE), Time = posteam, TDs = sum(rush_touchdown), "Jardas Por Carregada"=mean(yards_gained), Corridas=n(), SuperTrunfo = (sum(BPS) / sum(CL)) + (EpaMedio / 10), OpenFieldRatio = sum(BPS) / sum(CL), TotalBPS = sum(BPS), TotalCL = sum(CL)) %>%
+ select (Time, rusher_player_name, SuperTrunfo, OpenFieldRatio, TotalBPS, TotalCL, EpaMedio, TotalEpa, Corridas,  TDs) %>% distinct %>%
+ arrange(desc(OpenFieldRatio),  na.rm = TRUE) %>%
+ filter(Corridas >= 20, !(rusher_player_name %in% c("K.Murray", "M.Ingram", "L.Jackson", "D.Watson", "J.Allen", "Jos.Allen")), !(rusher_player_name == "K.Drake" & Time == "MIA"))
+rank3
+```
+```{r}
+ggplot(rank3, aes(x=EpaMedio, y=OpenFieldRatio)) + 
+  geom_text(aes(label=rusher_player_name), size= 3) +
+  labs(x = "EPA Médio (corridas acima de 8 jardas)",
+  y = "Open Field Ratio",
+  caption = "Dados de nflscrapR (Feito por Henrique Cardoso @5adescida",
+  title = "Rbs nas jogadas acima de 8 jardas",
+  subtitle = "2019")
+  
+ggsave('Teste1.png', dpi=3000)
+```
+
