@@ -1,0 +1,1218 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(na.tools)
+library(ggimage)
+
+#nflScrapR
+pbp <- read_csv(url("https://github.com/ryurko/nflscrapR-data/raw/master/play_by_play_data/regular_season/reg_pbp_2019.csv"))
+pbp
+##############################################
+
+#Pro Football Reference
+JogadoresAvaliados = c(1, 3, 14, 8, 17, 7, 18, 9, 4, 12, 32, 19, 26, 44, 6, 5, 15, 24, 25, 22, 16, 10, 34, 27, 23, 37, 39, 11, 40, 20, 68, 33, 52, 29, 46, 43, 48, 75, 28, 58, 30, 13, 41, 36, 47)
+
+PFR <- read.csv("PFR.csv", sep=";") %>%
+   filter(Rk %in% JogadoresAvaliados)
+
+PFR[PFR$Tm == "GNB",]$Tm <- "GB"
+PFR[PFR$Tm == "NWE",]$Tm <- "NE"
+PFR[PFR$Tm == "2TM",]$Tm <- "ARI"
+PFR[PFR$Tm == "SFO",]$Tm <- "SF"
+PFR[PFR$Tm == "NOR",]$Tm <- "NO"
+PFR[PFR$Tm == "TAM",]$Tm <- "TB"
+PFR[PFR$Tm == "KAN",]$Tm <- "KC"
+
+PFR$BrkTkl <- PFR$BrkTkl / PFR$Att
+PFR
+##############################################
+
+#Next Gen Stats
+JogadoresAvaliados2 = c("Miles Sanders", "Chris Carson", "Ezekiel Elliott", "Christian McCaffrey", "Mark Ingram", "Aaron Jones", "Kenyan Drake", "Derrick Henry", "Raheem Mostert", "Dalvin Cook", "Nick Chubb", "Gus Edwards", "Josh Jacobs", "Latavius Murray", "Jordan Howard", "Marlon Mack", "Phillip Lindsay", "Joe Mixon", "Saquon Barkley", "Alvin Kamara", "Devin Singletary", "Todd Gurley", "Carlos Hyde", "Ronald Jones", "Adrian Peterson", "Matt Breida", "Jamaal Williams", "Alexander Mattison", "Sony Michel", "LeSean McCoy", "Damien Williams", "Melvin Gordon", "DeAndre Washington", "Leonard Fournette", "Austin Ekeler", "Royce Freeman", "James Conner", "Benny Snell", "Devonta Freeman", "Kerryon Johnson", "Tevin Coleman", "David Montgomery", "Frank Gore", "Le'Veon Bell", "Peyton Barber")
+
+NextGenStats <- read.csv("NGS.csv", sep=";") %>%
+                filter(PLAYER.NAME %in% JogadoresAvaliados2)
+  
+NextGenStats[NextGenStats$TEAM == "LV",]$TEAM <- "OAK"
+NextGenStats
+
+##############################################
+
+#Football Outsiders
+FootballOutsiders <- read.csv("FO.csv", sep=";")  %>% na.exclude
+
+FootballOutsiders[5,2] <- "ARI"
+FootballOutsiders
+```
+
+
+```{r}
+
+#Dividir a base do nflscrapR entre Corridas e Passes
+
+corridas <- pbp %>% filter(rush_attempt==1, play_type=="run") %>% select(desc, rush_attempt, yards_gained, rusher_player_name, rush_touchdown, epa, posteam, td_prob, rusher_player_id) %>%
+ filter((rusher_player_name %in% FootbalOutsiders$Player), 
+        !((rusher_player_name %in% c("K.Drake")) & (posteam == "MIA")),
+        !((rusher_player_name %in% c("K.Johnson")) & (posteam == "ARI")),
+        !((rusher_player_name %in% c("J.Williams")) & (posteam == "IND")),
+        !((rusher_player_name %in% c("D.Washington")) & (posteam == "NO")))
+
+passes <- pbp %>% filter(pass_attempt==1, play_type=="pass") %>% select(desc, pass_attempt, yards_gained, receiver_player_name, epa, yac_epa, posteam, receiver_player_id)  %>%
+filter((receiver_player_name %in% FootbalOutsiders$Player), 
+        !((receiver_player_name %in% c("K.Drake")) & (posteam == "MIA")),
+        !((receiver_player_name %in% c("K.Johnson")) & (posteam == "ARI")),
+        !((receiver_player_name %in% c("J.Williams")) & (posteam == "IND")),
+        !((receiver_player_name %in% c("D.Washington")) & (posteam == "NO")))
+```
+
+
+
+
+```{r}
+
+#Criar ranking de jogadores nas estatísticas retiradas do nflscrapR
+
+#Epa Terrestre por tentativa
+rank_EPA_T_attempt <- corridas %>%
+ group_by(rusher_player_id) %>%
+ mutate(EpaTerrestre_pa = mean(epa, na.rm = TRUE), Time = posteam, Corridas=n()) %>%
+ select (Time, rusher_player_name, EpaTerrestre_pa, Corridas) %>% distinct %>%
+ arrange(desc(EpaTerrestre_pa),  na.rm = TRUE)
+rank_EPA_T_attempt
+
+###############################
+
+#Epa Terrestre "Longo" por tentativa
+corridasMaisDe8 <- corridas %>% filter(yards_gained >= 9)
+
+rank_EPA_T_longo_attempt <- corridasMaisDe8 %>%
+  group_by(rusher_player_id) %>%
+  mutate(EpaTerrestreLongo_pa = mean(epa, na.rm = TRUE), TotalEpa = sum(epa, na.rm = TRUE), Time = posteam, TDs = sum(rush_touchdown), "Jardas Por Carregada"=mean(yards_gained), Corridas=n()) %>%
+  select (Time, rusher_player_name, EpaTerrestreLongo_pa, TotalEpa, Corridas,  TDs) %>% distinct %>%
+  arrange(desc(EpaTerrestreLongo_pa),  na.rm = TRUE)
+
+rank_EPA_T_longo_attempt
+
+##############################
+
+#Open Field Ratio
+corridas <- corridas %>%
+  mutate(
+    CL = if_else(yards_gained >= 9, 1 , 0), #clutch line
+    BPS = if_else(yards_gained >= 20 | (yards_gained >= 9 & rush_touchdown == 1), 1, 0) #sucesso na big play
+  )
+
+rank_OFR  <- corridas %>%
+ filter(yards_gained >= 9) %>%
+ group_by(rusher_player_id) %>%
+ mutate(Time = posteam, Corridas=n(), OpenFieldRatio = sum(BPS) / sum(CL), TotalBPS = sum(BPS), TotalCL = sum(CL)) %>%
+ select (Time, rusher_player_name, OpenFieldRatio, TotalBPS, TotalCL, Corridas) %>% distinct %>%
+ arrange(desc(OpenFieldRatio),  na.rm = TRUE)
+rank_OFR
+
+#############################
+
+#EPA Aereo (recepções)
+rank_epa_aereo <- passes %>%  
+                             group_by(receiver_player_id) %>%
+                             mutate(Time = posteam, snaps_passes=n(), epaAereoMedio = mean(epa, na.rm = TRUE), yac_epaAereoMedio = mean(yac_epa, na.rm = TRUE)) %>%
+                             select(receiver_player_name, Time, epaAereoMedio, yac_epaAereoMedio, snaps_passes) %>% distinct %>%
+                             arrange(desc(epaAereoMedio),  na.rm = TRUE)
+rank_epa_aereo
+
+############################
+
+#Epa Yards After Catch
+rank_yac_epa_aereo <- rank_epa_aereo %>%
+                      arrange(desc(yac_epaAereoMedio))
+rank_yac_epa_aereo
+```
+
+```{r}
+#Criar ranking de jogadores nas estatísticas retiradas do Pro Football Reference
+
+#"Yards Before Contact" por tentativa
+rank_YardsBeforeContact <- PFR %>%
+                      arrange(desc(YBC.Att)) %>%
+                      select(Player, Tm, Pos, YBC.Att, YAC.Att, BrkTkl)
+rank_YardsBeforeContact
+
+###########################
+
+#"Yards After Contact" por tentativa
+rank_YardsAfterContact <- PFR %>%
+                      arrange(desc(YAC.Att)) %>%
+                      select(Player, Tm, Pos, YBC.Att, YAC.Att, BrkTkl, Att) %>% na.exclude
+rank_YardsAfterContact
+
+##########################
+
+#Broken Tackles
+rank_BrokenTackles <- PFR %>%
+                      arrange(desc(BrkTkl)) %>%
+                      select(Player, Tm, Pos, YBC.Att, YAC.Att, BrkTkl)
+rank_BrokenTackles
+
+##########################
+```
+
+
+
+```{r}
+#Criar ranking de jogadores nas estatísticas retiradas do Next Gen Stats
+
+rank_8manbox <- NextGenStats %>%
+                      arrange(desc(X8.D.)) %>%
+                      select(PLAYER.NAME, TEAM, X8.D., TLOS, ATT) %>% na.exclude
+rank_8manbox
+
+##########################
+
+rank_TimeBehindLOS <- NextGenStats %>%
+                      arrange(desc(TLOS)) %>%
+                      select(PLAYER.NAME, TEAM, X8.D., TLOS, ATT)
+rank_TimeBehindLOS
+```
+```{r}
+
+#Criar ranking de jogadores nas estatísticas retiradas do Football Outsiders
+rank_DVOA <- FootballOutsiders %>%
+                      arrange(Rk.2) %>%
+                      select(Player, Team, DVOA, DYAR.. , Succ..Rate)
+rank_DVOA
+
+############################
+
+rank_DYAR <- FootballOutsiders %>%
+                      arrange(Rk) %>%
+                      select(Player, Team, DVOA, DYAR.. , Succ..Rate)
+rank_DYAR
+
+############################
+
+rank_SuccessRate <- FootballOutsiders %>%
+                      arrange(Succ..Rate) %>%
+                      select(Player, Team, DVOA, DYAR.. , Succ..Rate)
+rank_SuccessRate
+```
+
+```{r}
+#Criar as estatísticas dos ataques
+
+rank_times <- pbp %>%
+  group_by(posteam) %>%
+  mutate(
+    EpaMedio =  mean(epa, na.rm = TRUE), 
+    
+    FirstDowns = sum(if_else(down == 1, 1, 0), na.rm = TRUE),
+    SecondDowns = sum(if_else(down == 2, 1, 0), na.rm = TRUE),
+    ThirdDowns = sum(if_else(down == 3, 1, 0), na.rm = TRUE),
+    FourthDowns = sum(if_else(down == 4, 1, 0), na.rm = TRUE),
+    
+    First_downs_converted = sum(if_else((down == 1 & yards_gained >= ydstogo) | (down == 1 & penalty_team == defteam), 1, 0), na.rm = TRUE),
+    Second_downs_converted = sum(if_else((down == 2 & yards_gained >= ydstogo) | (down == 2 & penalty_team == defteam), 1, 0), na.rm = TRUE),
+    Third_downs_converted = sum(if_else((down == 3 & yards_gained >= ydstogo) | (down == 3 & penalty_team == defteam), 1, 0), na.rm = TRUE),
+    Fourth_downs_converted = sum(if_else((down == 4 & yards_gained >= ydstogo) | (down == 4 & penalty_team == defteam), 1, 0), na.rm = TRUE),
+   
+    First_down_conv_pct = First_downs_converted / FirstDowns,
+    Second_down_conv_pct = Second_downs_converted / SecondDowns,
+    Third_down_conv_pct = Third_downs_converted / ThirdDowns,
+    Fourth_down_conv_pct = Fourth_downs_converted / FourthDowns
+      ) %>%
+  select(posteam, EpaMedio, First_down_conv_pct, Second_down_conv_pct, Third_down_conv_pct, Fourth_down_conv_pct) %>% distinct %>%
+  arrange(desc(EpaMedio), na.rm = TRUE) %>% na.exclude %>%
+  filter(posteam != "MIA")
+
+#####
+
+rank_times_epaMedio <- rank_times %>% arrange(desc(EpaMedio))
+rank_times_epaMedio$rank <- NA
+rank_times_epaMedio$rank <- 1:nrow(rank_times_epaMedio)
+rank_times_epaMedio
+
+rank_times_FstPct <- rank_times %>% arrange(desc(First_down_conv_pct))
+rank_times_FstPct$rank <- NA
+rank_times_FstPct$rank <- 1:nrow(rank_times_FstPct)
+rank_times_FstPct
+
+rank_times_SndPct <- rank_times %>% arrange(desc(Second_down_conv_pct))
+rank_times_SndPct$rank <- NA
+rank_times_SndPct$rank <- 1:nrow(rank_times_SndPct)
+rank_times_SndPct
+
+rank_times_TrdPct <- rank_times %>% arrange(desc(Third_down_conv_pct))
+rank_times_TrdPct$rank <- NA
+rank_times_TrdPct$rank <- 1:nrow(rank_times_TrdPct)
+rank_times_TrdPct
+
+rank_times_FthPct <- rank_times %>% arrange(desc(Fourth_down_conv_pct))
+rank_times_FthPct$rank <- NA
+rank_times_FthPct$rank <- 1:nrow(rank_times_FthPct)
+rank_times_FthPct
+#rank_times_FthPct$rank[order(-rank_times_FthPct$Fourth_down_conv_pct)] <- 1:nrow(rank_times_FthPct)
+```
+
+```{r}
+#Organizar por times
+
+#EPA Terrestre
+rank_teams_EPA_T_attempt <- rank_EPA_T_attempt %>%
+  mutate(
+    EpaVezesNumCorridas = EpaTerrestre_pa * Corridas
+  ) %>%
+  group_by(Time) %>%
+  mutate(
+    CorridasTime = sum(Corridas),
+    Epa_Media_Ponderada = sum(EpaVezesNumCorridas) / CorridasTime
+  ) %>%
+  select(Time, Epa_Media_Ponderada) %>% distinct %>%
+  arrange(desc(Epa_Media_Ponderada))
+
+rank_teams_EPA_T_attempt$rank <- NA
+rank_teams_EPA_T_attempt$rank <- 1:nrow(rank_teams_EPA_T_attempt)
+rank_teams_EPA_T_attempt
+
+#EPA Terrestre Longo
+rank_teams_EPA_T_longo_attempt <- rank_EPA_T_longo_attempt %>%
+  mutate(
+    EpaVezesNumCorridas = TotalEpa * Corridas
+  ) %>%
+  group_by(Time) %>%
+  mutate(
+    CorridasTime = sum(Corridas),
+    Epa_Media_Ponderada = sum(EpaVezesNumCorridas) / CorridasTime
+  ) %>%
+  select(Time, Epa_Media_Ponderada) %>% distinct %>%
+  arrange(desc(Epa_Media_Ponderada))
+
+
+rank_teams_EPA_T_longo_attempt$rank <- NA
+rank_teams_EPA_T_longo_attempt$rank <- 1:nrow(rank_teams_EPA_T_longo_attempt)
+rank_teams_EPA_T_longo_attempt
+
+#OFR
+rank_teams_OFR <- rank_OFR %>%
+  mutate(
+    OFRVezesNumCorridas = OpenFieldRatio * Corridas
+  ) %>%
+  group_by(Time) %>%
+  mutate(
+    CorridasTime = sum(Corridas),
+    OFR_Media_Ponderada = sum(OFRVezesNumCorridas) / CorridasTime
+  ) %>%
+  select(Time, OFR_Media_Ponderada) %>% distinct %>%
+  arrange(desc(OFR_Media_Ponderada))
+
+
+rank_teams_OFR$rank <- NA
+rank_teams_OFR$rank <- 1:nrow(rank_teams_OFR)
+rank_teams_OFR
+
+#EPA Aéreo
+rank_teams_epa_aereo <- rank_epa_aereo %>%
+  mutate(
+    EPAaereoVezesNumRec = epaAereoMedio * snaps_passes
+  ) %>%
+  group_by(Time) %>%
+  mutate(
+    RecTime = sum(snaps_passes),
+    EPAAereo_Media_Ponderada = sum(EPAaereoVezesNumRec) / RecTime
+  ) %>%
+  select(Time, EPAAereo_Media_Ponderada) %>% distinct %>%
+  arrange(desc(EPAAereo_Media_Ponderada))
+
+
+rank_teams_epa_aereo$rank <- NA
+rank_teams_epa_aereo$rank <- 1:nrow(rank_teams_epa_aereo)
+rank_teams_epa_aereo
+
+#EPA Yards After Catch
+rank_teams_epayac <- rank_epa_aereo %>%
+  mutate(
+    EPAYACVezesNumRec = yac_epaAereoMedio * snaps_passes
+  ) %>%
+  group_by(Time) %>%
+  mutate(
+    RecTime = sum(snaps_passes),
+    EPAYAC_Media_Ponderada = sum(yac_epaAereoMedio) / RecTime
+  ) %>%
+  select(Time, EPAYAC_Media_Ponderada) %>% distinct %>%
+  arrange(desc(EPAYAC_Media_Ponderada))
+
+rank_teams_epayac$rank <- NA
+rank_teams_epayac$rank <- 1:nrow(rank_teams_epayac)
+rank_teams_epayac
+
+#Yards Before Contact/Attempt
+rank_teams_YardsBeforeContact <- rank_YardsAfterContact %>%
+  mutate(
+    YardsBeforeContactVezesAttempt = YBC.Att * Att
+  ) %>%
+  group_by(Tm) %>%
+  mutate(
+    CorridasTime = sum(Att),
+    YBC_Media_Ponderada = sum(YardsBeforeContactVezesAttempt) / CorridasTime
+  ) %>%
+  select(Tm, YBC_Media_Ponderada) %>% distinct %>%
+  arrange(desc(YBC_Media_Ponderada))
+
+rank_teams_YardsBeforeContact$rank <- NA
+rank_teams_YardsBeforeContact$rank <- 1:nrow(rank_teams_YardsBeforeContact)
+rank_teams_YardsBeforeContact
+
+#Yards After Contact/Attempt
+rank_teams_YardsAfterContact <- rank_YardsAfterContact %>%
+  mutate(
+    YardsAfterContactVezesAttempt = YAC.Att * Att
+  ) %>%
+  group_by(Tm) %>%
+  mutate(
+    CorridasTime = sum(Att),
+    YAC_Media_Ponderada = sum(YardsAfterContactVezesAttempt) / CorridasTime
+  ) %>%
+  select(Tm, YAC_Media_Ponderada) %>% distinct %>%
+  arrange(desc(YAC_Media_Ponderada))
+
+rank_teams_YardsAfterContact$rank <- NA
+rank_teams_YardsAfterContact$rank <- 1:nrow(rank_teams_YardsAfterContact)
+rank_teams_YardsAfterContact
+
+#Broken Tackles
+rank_teams_BrokenTackles <- rank_YardsAfterContact %>%
+  mutate(
+    BrokenTacklesVezesAttempt = BrkTkl * Att
+  ) %>%
+  group_by(Tm) %>%
+  mutate(
+    CorridasTime = sum(Att),
+    BrkTkl_Media_Ponderada = sum(BrokenTacklesVezesAttempt) / CorridasTime
+  ) %>%
+  select(Tm, BrkTkl_Media_Ponderada) %>% distinct %>%
+  arrange(desc(BrkTkl_Media_Ponderada))
+
+rank_teams_BrokenTackles$rank <- NA
+rank_teams_BrokenTackles$rank <- 1:nrow(rank_teams_BrokenTackles)
+rank_teams_BrokenTackles
+
+#8manBox
+rank_teams_8manbox <- rank_8manbox %>%
+  mutate(
+    EightManInBoxVezesAttempt = X8.D. * ATT
+  ) %>%
+  group_by(TEAM) %>%
+  mutate(
+    CorridasTime = sum(ATT),
+    EightManInBox_Media_Ponderada = sum(EightManInBoxVezesAttempt) / CorridasTime
+  ) %>%
+  select(TEAM, EightManInBox_Media_Ponderada) %>% distinct %>%
+  arrange(desc(EightManInBox_Media_Ponderada))
+
+rank_teams_8manbox$rank <- NA
+rank_teams_8manbox$rank <- 1:nrow(rank_teams_8manbox)
+rank_teams_8manbox
+
+#TimeBehindLOS
+rank_teams_TBLOS <- rank_8manbox %>%
+  mutate(
+    TimeBehindLOSVezesAttempt = TLOS * ATT
+  ) %>%
+  group_by(TEAM) %>%
+  mutate(
+    CorridasTime = sum(ATT),
+    TimeBehindLOS_Media_Ponderada = sum(TimeBehindLOSVezesAttempt) / CorridasTime
+  ) %>%
+  select(TEAM, TimeBehindLOS_Media_Ponderada) %>% distinct %>%
+  arrange(desc(TimeBehindLOS_Media_Ponderada))
+
+rank_teams_TBLOS$rank <- NA
+rank_teams_TBLOS$rank <- 1:nrow(rank_teams_TBLOS)
+rank_teams_TBLOS
+
+#DVOA
+rank_teams_DVOA <- FootballOutsiders %>%
+  mutate(
+    DVOAVezesAttempt = DVOA * Runs
+  ) %>%
+  group_by(Team) %>%
+  mutate(
+    CorridasTime = sum(Runs),
+    DVOA_Media_Ponderada = sum(DVOAVezesAttempt) / CorridasTime
+  ) %>%
+  select(Team, DVOA_Media_Ponderada) %>% distinct %>%
+  arrange(desc(DVOA_Media_Ponderada))
+
+rank_teams_DVOA$rank <- NA
+rank_teams_DVOA$rank <- 1:nrow(rank_teams_DVOA)
+rank_teams_DVOA
+
+#DYAR
+rank_teams_DYAR <- FootballOutsiders %>%
+  mutate(
+    DYARVezesAttempt = DYAR.. * Runs
+  ) %>%
+  group_by(Team) %>%
+  mutate(
+    CorridasTime = sum(Runs),
+    DYAR_Media_Ponderada = sum(DYARVezesAttempt) / CorridasTime
+  ) %>%
+  select(Team, DYAR_Media_Ponderada) %>% distinct %>%
+  arrange(desc(DYAR_Media_Ponderada))
+
+rank_teams_DYAR$rank <- NA
+rank_teams_DYAR$rank <- 1:nrow(rank_teams_DYAR)
+rank_teams_DYAR
+
+#Success Rate
+rank_teams_sucrate <- FootballOutsiders %>%
+  mutate(
+    SuccessRateVezesAttempt = Succ..Rate * Runs
+  ) %>%
+  group_by(Team) %>%
+  mutate(
+    CorridasTime = sum(Runs),
+    Succ.Rate_Media_Ponderada = sum(SuccessRateVezesAttempt) / CorridasTime
+  ) %>%
+  select(Team, Succ.Rate_Media_Ponderada) %>% distinct %>%
+  arrange(desc(Succ.Rate_Media_Ponderada))
+
+rank_teams_sucrate$rank <- NA
+rank_teams_sucrate$rank <- 1:nrow(rank_teams_sucrate)
+rank_teams_sucrate
+```
+
+```{r}
+#Comparar stats dos Running Backs com o EPA Médio Geral dos times
+
+#Epa Terrestre per attmpt
+a <- rank_teams_EPA_T_attempt %>% arrange(Time)
+a$rank
+
+b <- rank_times_epaMedio %>% arrange(posteam)
+b$rank
+print("Epa Terrestre per attempt vs Epa Medio")
+cor(a$rank, b$rank, method = "pearson")
+
+#Epa Terrestre Longo per attmpt
+a <- rank_teams_EPA_T_longo_attempt %>% arrange(Time)
+a$rank
+
+b <- rank_times_epaMedio %>% arrange(posteam)
+b$rank
+print("Epa Terrestre Longo per attempt vs Epa Medio")
+cor(a$rank, b$rank, method = "pearson")
+
+#Epa Aéreo
+a <- rank_teams_epa_aereo %>% arrange(Time)
+a$rank
+
+b <- rank_times_epaMedio %>% arrange(posteam)
+b$rank
+print("Epa Aéreo vs Epa Medio")
+cor(a$rank, b$rank, method = "pearson")
+
+#OFR
+a <- rank_teams_OFR %>% arrange(Time)
+a$rank
+
+b <- rank_times_epaMedio %>% arrange(posteam)
+b$rank
+print("OFR vs Epa Medio")
+cor(a$rank, b$rank, method = "pearson")
+
+#Epa Yards After Catch
+a <- rank_teams_epayac %>% arrange(Time)
+a$rank
+
+b <- rank_times_epaMedio %>% arrange(posteam)
+b$rank
+print("EPA Yards After Catch vs Epa Medio")
+cor(a$rank, b$rank, method = "pearson")
+
+#Yards Before Contact/Attempt
+a <- rank_teams_YardsBeforeContact %>% arrange(Tm)
+a$rank
+
+b <- rank_times_epaMedio %>% arrange(posteam)
+b$rank
+print("Yards Before Contact/Attempt vs Epa Medio")
+cor(a$rank, b$rank, method = "pearson")
+
+#Yards After Contact/Attempt
+a <- rank_teams_YardsAfterContact %>% arrange(Tm)
+a$rank
+
+b <- rank_times_epaMedio %>% arrange(posteam)
+b$rank
+print("Yards After Contact/Attempt vs Epa Medio")
+cor(a$rank, b$rank, method = "pearson")
+
+#Broken Tackle
+a <- rank_teams_BrokenTackles %>% arrange(Tm)
+a$rank
+
+b <- rank_times_epaMedio %>% arrange(posteam)
+b$rank
+print("Broken Tackles vs Epa Medio")
+cor(a$rank, b$rank, method = "pearson")
+
+#8+D%
+a <- rank_teams_8manbox %>% arrange(TEAM)
+a$rank
+
+b <- rank_times_epaMedio %>% arrange(posteam)
+b$rank
+print("8 man in the box Percentage vs Epa Medio")
+cor(a$rank, b$rank, method = "pearson")
+
+#Time Behind LOS
+a <- rank_teams_TBLOS %>% arrange(TEAM)
+a$rank
+
+b <- rank_times_epaMedio %>% arrange(posteam)
+b$rank
+print("Time Behind Line Of Scrimage vs Epa Medio")
+cor(a$rank, b$rank, method = "pearson")
+
+#DVOA
+a <- rank_teams_DVOA %>% arrange(Team)
+a$rank
+
+b <- rank_times_epaMedio %>% arrange(posteam)
+b$rank
+print("DVOA vs Epa Medio")
+cor(a$rank, b$rank, method = "pearson")
+
+#DYAR
+a <- rank_teams_DYAR %>% arrange(Team)
+a$rank
+
+b <- rank_times_epaMedio %>% arrange(posteam)
+b$rank
+print("DYAR vs Epa Medio")
+cor(a$rank, b$rank, method = "pearson")
+
+#Success Rate
+a <- rank_teams_sucrate %>% arrange(Team)
+a$rank
+
+b <- rank_times_epaMedio %>% arrange(posteam)
+b$rank
+print("Success Rate Running Game vs Epa Medio")
+cor(a$rank, b$rank, method = "pearson")
+
+print("############################################################")
+#Comparar stats dos Running Backs com a taxa de conversão de primeiras descidas.
+
+#Epa Terrestre per attmpt
+a <- rank_teams_EPA_T_attempt %>% arrange(Time)
+a$rank
+
+b <- rank_times_FstPct %>% arrange(posteam)
+b$rank
+print("Epa Terrestre per attempt vs 1st Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Epa Terrestre Longo per attmpt
+a <- rank_teams_EPA_T_longo_attempt %>% arrange(Time)
+a$rank
+
+b <- rank_times_FstPct %>% arrange(posteam)
+b$rank
+print("Epa Terrestre Longo per attempt vs 1st Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Epa Aéreo
+a <- rank_teams_epa_aereo %>% arrange(Time)
+a$rank
+
+b <- rank_times_FstPct %>% arrange(posteam)
+b$rank
+print("Epa Aéreo vs 1st Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#OFR
+a <- rank_teams_OFR %>% arrange(Time)
+a$rank
+
+b <- rank_times_FstPct %>% arrange(posteam)
+b$rank
+print("OFR vs 1st Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Epa Yards After Catch
+a <- rank_teams_epayac %>% arrange(Time)
+a$rank
+
+b <- rank_times_FstPct %>% arrange(posteam)
+b$rank
+print("EPA Yards After Catch vs 1st Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Yards Before Contact/Attempt
+a <- rank_teams_YardsBeforeContact %>% arrange(Tm)
+a$rank
+
+b <- rank_times_FstPct %>% arrange(posteam)
+b$rank
+print("Yards Before Contact/Attempt vs 1st Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Yards After Contact/Attempt
+a <- rank_teams_YardsAfterContact %>% arrange(Tm)
+a$rank
+
+b <- rank_times_FstPct %>% arrange(posteam)
+b$rank
+print("Yards After Contact/Attempt vs 1st Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Broken Tackle
+a <- rank_teams_BrokenTackles %>% arrange(Tm)
+a$rank
+
+b <- rank_times_FstPct %>% arrange(posteam)
+b$rank
+print("Broken Tackles vs 1st Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#8+D%
+a <- rank_teams_8manbox %>% arrange(TEAM)
+a$rank
+
+b <- rank_times_FstPct %>% arrange(posteam)
+b$rank
+print("8 man in the box Percentage vs 1st Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Time Behind LOS
+a <- rank_teams_TBLOS %>% arrange(TEAM)
+a$rank
+
+b <- rank_times_FstPct %>% arrange(posteam)
+b$rank
+print("Time Behind Line Of Scrimage vs 1st Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#DVOA
+a <- rank_teams_DVOA %>% arrange(Team)
+a$rank
+
+b <- rank_times_FstPct %>% arrange(posteam)
+b$rank
+print("DVOA vs 1st Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#DYAR
+a <- rank_teams_DYAR %>% arrange(Team)
+a$rank
+
+b <- rank_times_FstPct %>% arrange(posteam)
+b$rank
+print("DYAR vs 1st Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Success Rate
+a <- rank_teams_sucrate %>% arrange(Team)
+a$rank
+
+b <- rank_times_FstPct %>% arrange(posteam)
+b$rank
+print("Success Rate Running Game vs 1st Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+
+print("############################################################")
+#Comparar stats dos Running Backs com a taxa de conversão de segundas descidas.
+
+#Epa Terrestre per attmpt
+a <- rank_teams_EPA_T_attempt %>% arrange(Time)
+a$rank
+
+b <- rank_times_SndPct %>% arrange(posteam)
+b$rank
+print("Epa Terrestre per attempt vs 2nd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Epa Terrestre Longo per attmpt
+a <- rank_teams_EPA_T_longo_attempt %>% arrange(Time)
+a$rank
+
+b <- rank_times_SndPct %>% arrange(posteam)
+b$rank
+print("Epa Terrestre Longo per attempt vs 2nd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Epa Aéreo
+a <- rank_teams_epa_aereo %>% arrange(Time)
+a$rank
+
+b <- rank_times_SndPct %>% arrange(posteam)
+b$rank
+print("Epa Aéreo vs 2nd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#OFR
+a <- rank_teams_OFR %>% arrange(Time)
+a$rank
+
+b <- rank_times_SndPct %>% arrange(posteam)
+b$rank
+print("OFR vs 2nd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Epa Yards After Catch
+a <- rank_teams_epayac %>% arrange(Time)
+a$rank
+
+b <- rank_times_SndPct %>% arrange(posteam)
+b$rank
+print("EPA Yards After Catch vs 2nd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Yards Before Contact/Attempt
+a <- rank_teams_YardsBeforeContact %>% arrange(Tm)
+a$rank
+
+b <- rank_times_SndPct %>% arrange(posteam)
+b$rank
+print("Yards Before Contact/Attempt vs 2nd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Yards After Contact/Attempt
+a <- rank_teams_YardsAfterContact %>% arrange(Tm)
+a$rank
+
+b <- rank_times_SndPct %>% arrange(posteam)
+b$rank
+print("Yards After Contact/Attempt vs 2nd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Broken Tackle
+a <- rank_teams_BrokenTackles %>% arrange(Tm)
+a$rank
+
+b <- rank_times_SndPct %>% arrange(posteam)
+b$rank
+print("Broken Tackles vs 2nd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#8+D%
+a <- rank_teams_8manbox %>% arrange(TEAM)
+a$rank
+
+b <- rank_times_SndPct %>% arrange(posteam)
+b$rank
+print("8 man in the box Percentage vs 2nd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Time Behind LOS
+a <- rank_teams_TBLOS %>% arrange(TEAM)
+a$rank
+
+b <- rank_times_SndPct %>% arrange(posteam)
+b$rank
+print("Time Behind Line Of Scrimage vs 2nd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#DVOA
+a <- rank_teams_DVOA %>% arrange(Team)
+a$rank
+
+b <- rank_times_SndPct %>% arrange(posteam)
+b$rank
+print("DVOA vs 2nd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#DYAR
+a <- rank_teams_DYAR %>% arrange(Team)
+a$rank
+
+b <- rank_times_SndPct %>% arrange(posteam)
+b$rank
+print("DYAR vs 2nd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Success Rate
+a <- rank_teams_sucrate %>% arrange(Team)
+a$rank
+
+b <- rank_times_SndPct %>% arrange(posteam)
+b$rank
+print("Success Rate Running Game vs 2nd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+
+print("############################################################")
+#Comparar stats dos Running Backs com a taxa de conversão de terceiras descidas.
+
+#Epa Terrestre per attmpt
+a <- rank_teams_EPA_T_attempt %>% arrange(Time)
+a$rank
+
+b <- rank_times_TrdPct %>% arrange(posteam)
+b$rank
+print("Epa Terrestre per attempt vs 3rd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Epa Terrestre Longo per attmpt
+a <- rank_teams_EPA_T_longo_attempt %>% arrange(Time)
+a$rank
+
+b <- rank_times_TrdPct %>% arrange(posteam)
+b$rank
+print("Epa Terrestre Longo per attempt vs 3rd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Epa Aéreo
+a <- rank_teams_epa_aereo %>% arrange(Time)
+a$rank
+
+b <- rank_times_TrdPct %>% arrange(posteam)
+b$rank
+print("Epa Aéreo vs 3rd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#OFR
+a <- rank_teams_OFR %>% arrange(Time)
+a$rank
+
+b <- rank_times_TrdPct %>% arrange(posteam)
+b$rank
+print("OFR vs 3rd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Epa Yards After Catch
+a <- rank_teams_epayac %>% arrange(Time)
+a$rank
+
+b <- rank_times_TrdPct %>% arrange(posteam)
+b$rank
+print("EPA Yards After Catch vs 3rd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Yards Before Contact/Attempt
+a <- rank_teams_YardsBeforeContact %>% arrange(Tm)
+a$rank
+
+b <- rank_times_TrdPct %>% arrange(posteam)
+b$rank
+print("Yards Before Contact/Attempt vs 3rd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Yards After Contact/Attempt
+a <- rank_teams_YardsAfterContact %>% arrange(Tm)
+a$rank
+
+b <- rank_times_TrdPct %>% arrange(posteam)
+b$rank
+print("Yards After Contact/Attempt vs 3rd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Broken Tackle
+a <- rank_teams_BrokenTackles %>% arrange(Tm)
+a$rank
+
+b <- rank_times_TrdPct %>% arrange(posteam)
+b$rank
+print("Broken Tackles vs 3rd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#8+D%
+a <- rank_teams_8manbox %>% arrange(TEAM)
+a$rank
+
+b <- rank_times_TrdPct %>% arrange(posteam)
+b$rank
+print("8 man in the box Percentage vs 3rd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Time Behind LOS
+a <- rank_teams_TBLOS %>% arrange(TEAM)
+a$rank
+
+b <- rank_times_TrdPct %>% arrange(posteam)
+b$rank
+print("Time Behind Line Of Scrimage vs 3rd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#DVOA
+a <- rank_teams_DVOA %>% arrange(Team)
+a$rank
+
+b <- rank_times_TrdPct %>% arrange(posteam)
+b$rank
+print("DVOA vs 3rd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#DYAR
+a <- rank_teams_DYAR %>% arrange(Team)
+a$rank
+
+b <- rank_times_TrdPct %>% arrange(posteam)
+b$rank
+print("DYAR vs 3rd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Success Rate
+a <- rank_teams_sucrate %>% arrange(Team)
+a$rank
+
+b <- rank_times_TrdPct %>% arrange(posteam)
+b$rank
+print("Success Rate Running Game vs 3rd Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+
+print("############################################################")
+#Comparar stats dos Running Backs com a taxa de conversão de quartas descidas.
+
+#Epa Terrestre per attmpt
+a <- rank_teams_EPA_T_attempt %>% arrange(Time)
+a$rank
+
+b <- rank_times_FthPct %>% arrange(posteam)
+b$rank
+print("Epa Terrestre per attempt vs 4th Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Epa Terrestre Longo per attmpt
+a <- rank_teams_EPA_T_longo_attempt %>% arrange(Time)
+a$rank
+
+b <- rank_times_FthPct %>% arrange(posteam)
+b$rank
+print("Epa Terrestre Longo per attempt vs 4th Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Epa Aéreo
+a <- rank_teams_epa_aereo %>% arrange(Time)
+a$rank
+
+b <- rank_times_FthPct %>% arrange(posteam)
+b$rank
+print("Epa Aéreo vs 4th Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#OFR
+a <- rank_teams_OFR %>% arrange(Time)
+a$rank
+
+b <- rank_times_FthPct %>% arrange(posteam)
+b$rank
+print("OFR vs 4th Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Epa Yards After Catch
+a <- rank_teams_epayac %>% arrange(Time)
+a$rank
+
+b <- rank_times_FthPct %>% arrange(posteam)
+b$rank
+print("EPA Yards After Catch vs 4th Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Yards Before Contact/Attempt
+a <- rank_teams_YardsBeforeContact %>% arrange(Tm)
+a$rank
+
+b <- rank_times_FthPct %>% arrange(posteam)
+b$rank
+print("Yards Before Contact/Attempt vs 4th Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Yards After Contact/Attempt
+a <- rank_teams_YardsAfterContact %>% arrange(Tm)
+a$rank
+
+b <- rank_times_FthPct %>% arrange(posteam)
+b$rank
+print("Yards After Contact/Attempt vs 4th Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Broken Tackle
+a <- rank_teams_BrokenTackles %>% arrange(Tm)
+a$rank
+
+b <- rank_times_FthPct %>% arrange(posteam)
+b$rank
+print("Broken Tackles vs 4th Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#8+D%
+a <- rank_teams_8manbox %>% arrange(TEAM)
+a$rank
+
+b <- rank_times_FthPct %>% arrange(posteam)
+b$rank
+print("8 man in the box Percentage vs 4th Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Time Behind LOS
+a <- rank_teams_TBLOS %>% arrange(TEAM)
+a$rank
+
+b <- rank_times_FthPct %>% arrange(posteam)
+b$rank
+print("Time Behind Line Of Scrimage vs 4th Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#DVOA
+a <- rank_teams_DVOA %>% arrange(Team)
+a$rank
+
+b <- rank_times_FthPct %>% arrange(posteam)
+b$rank
+print("DVOA vs 4th Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#DYAR
+a <- rank_teams_DYAR %>% arrange(Team)
+a$rank
+
+b <- rank_times_FthPct %>% arrange(posteam)
+b$rank
+print("DYAR vs 4th Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+#Success Rate
+a <- rank_teams_sucrate %>% arrange(Team)
+a$rank
+
+b <- rank_times_FthPct %>% arrange(posteam)
+b$rank
+print("Success Rate Running Game vs 4th Down Cnv")
+cor(a$rank, b$rank, method = "pearson")
+
+print("############################################################")
+#Comparar stats dos Running Backs com o Offensive DVOA do Football Outsiders.
+
+rank_times_OffensiveDVOA <- c(13, 15, 1, 21, 27, 25, 29, 20, 2, 26, 18, 8, 17, 19, 24, 3, 12, 16, 10, 11, 4, 22, 32, 9, 14, 31, 5, 7, 23, 6, 30)
+
+#Epa Terrestre per attmpt
+a <- rank_teams_EPA_T_attempt %>% arrange(Time)
+a$rank
+
+b <- rank_times_OffensiveDVOA 
+
+print("Epa Terrestre per attempt vs Offensive DVOA")
+cor(a$rank, b, method = "pearson")
+
+#Epa Terrestre Longo per attmpt
+a <- rank_teams_EPA_T_longo_attempt %>% arrange(Time)
+a$rank
+
+b <- rank_times_OffensiveDVOA
+b
+print("Epa Terrestre Longo per attempt vs Offensive DVOA")
+cor(a$rank, b, method = "pearson")
+
+#Epa Aéreo
+a <- rank_teams_epa_aereo %>% arrange(Time)
+a$rank
+
+b <- rank_times_OffensiveDVOA
+b
+print("Epa Aéreo vs Offensive DVOA")
+cor(a$rank, b, method = "pearson")
+
+#OFR
+a <- rank_teams_OFR %>% arrange(Time)
+a$rank
+
+b <- rank_times_OffensiveDVOA
+b
+print("OFR vs Offensive DVOA")
+cor(a$rank, b, method = "pearson")
+
+#Epa Yards After Catch
+a <- rank_teams_epayac %>% arrange(Time)
+a$rank
+
+b <- rank_times_OffensiveDVOA
+b
+print("EPA Yards After Catch vs Offensive DVOA")
+cor(a$rank, b, method = "pearson")
+
+#Yards Before Contact/Attempt
+a <- rank_teams_YardsBeforeContact %>% arrange(Tm)
+a$rank
+
+b <- rank_times_OffensiveDVOA
+b
+print("Yards Before Contact/Attempt vs Offensive DVOA")
+cor(a$rank, b, method = "pearson")
+
+#Yards After Contact/Attempt
+a <- rank_teams_YardsAfterContact %>% arrange(Tm)
+a$rank
+
+b <- rank_times_OffensiveDVOA
+b
+print("Yards After Contact/Attempt vs Offensive DVOA")
+cor(a$rank, b, method = "pearson")
+
+#Broken Tackle
+a <- rank_teams_BrokenTackles %>% arrange(Tm)
+a$rank
+
+b <- rank_times_OffensiveDVOA
+b
+print("Broken Tackles vs Offensive DVOA")
+cor(a$rank, b, method = "pearson")
+
+#8+D%
+a <- rank_teams_8manbox %>% arrange(TEAM)
+a$rank
+
+b <- rank_times_OffensiveDVOA
+b
+print("8 man in the box Percentage vs Offensive DVOA")
+cor(a$rank, b, method = "pearson")
+
+#Time Behind LOS
+a <- rank_teams_TBLOS %>% arrange(TEAM)
+a$rank
+
+b <- rank_times_OffensiveDVOA
+b
+print("Time Behind Line Of Scrimage vs Offensive DVOA")
+cor(a$rank, b, method = "pearson")
+
+#DVOA
+a <- rank_teams_DVOA %>% arrange(Team)
+a$rank
+
+b <- rank_times_OffensiveDVOA
+b
+print("DVOA vs Offensive DVOA")
+cor(a$rank, b, method = "pearson")
+
+#DYAR
+a <- rank_teams_DYAR %>% arrange(Team)
+a$rank
+
+b <- rank_times_OffensiveDVOA
+b
+print("DYAR vs Offensive DVOA")
+cor(a$rank, b, method = "pearson")
+
+#Success Rate
+a <- rank_teams_sucrate %>% arrange(Team)
+
+
+b <- rank_times_OffensiveDVOA
+b
+print("Success Rate Running Game vs Offensive DVOA")
+cor(a$rank, b, method = "pearson")
+
+```
+```{r}
+
+```
+
